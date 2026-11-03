@@ -62,3 +62,46 @@ def make_full_link(href):
     if parsed.path in ("", "/"):
         return None
     return url
+
+def fetch_page(url):
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+    except requests.RequestException as error:
+        print(f"Page could not be downloaded: {error}")
+        return None
+
+    if "html" not in response.headers.get("Content-Type", "").lower():
+        print("The server did not return an HTML page.")
+        return None
+
+    return BeautifulSoup(response.text, "html.parser")
+
+
+def parse_card(card):
+    link_tag = card.select_one(".title[href]")
+    price_tag = card.select_one(".price span") or card.select_one(".price")
+    if link_tag is None or price_tag is None:
+        return None
+
+    name = " ".join((link_tag.get("title") or link_tag.get_text()).split())
+    link = make_full_link(link_tag.get("href"))
+    price = parse_price_text(price_tag.get_text(strip=True))
+    if not name or link is None or price is None:
+        return None
+
+    product_id = urlparse(link).path.rstrip("/").split("/")[-1]
+    if not product_id:
+        return None
+
+    description_tag = card.select_one(".description")
+    description = " ".join(description_tag.get_text().split()) if description_tag else ""
+
+    return {
+        "id": product_id,
+        "name": name,
+        "description": description,
+        "price": price,
+        "link": link,
+        "last_seen": timestamp(),
+    }
