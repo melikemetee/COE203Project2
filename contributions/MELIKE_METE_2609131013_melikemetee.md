@@ -1,6 +1,4 @@
 # Individual Contribution – Melike Mete
-Student number: 2609131013
-GitHub username: melikemetee
 
 **Project:** COE203 Project 2 – Laptop Price Tracker & Alerts
 
