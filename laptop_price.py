@@ -105,3 +105,65 @@ def parse_card(card):
         "link": link,
         "last_seen": timestamp(),
     }
+def build_message(laptop, old_price):
+    new_price = laptop["price"]
+    return (
+        f"{laptop['name']}\n"
+        f"Price dropped: ${old_price:.2f} -> ${new_price:.2f} "
+        f"(-${old_price - new_price:.2f})\n"
+        f"{laptop['link']}"
+    )
+
+
+def send_notification(topic, laptop, old_price):
+    try:
+        response = requests.post(
+            f"{NTFY_SERVER}/{topic}",
+            data=build_message(laptop, old_price).encode("utf-8"),
+            headers={"Title": "Laptop price drop"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        print(f"Notification could not be sent: {error}")
+        return False
+
+    print(
+        f"Notification sent: {laptop['name']} "
+        f"${old_price:.2f} -> ${laptop['price']:.2f}"
+    )
+    return True
+
+
+def compare_and_notify(saved, current, topic, dry_run):
+    drops = 0
+
+    for product_id, laptop in current.items():
+        new_price = laptop["price"]
+        old_record = saved.get(product_id)
+
+        if old_record is None:
+            print(f"New laptop: {laptop['name']} (${new_price:.2f})")
+            saved[product_id] = laptop
+            continue
+
+        old_price = to_price(old_record.get("price")) if isinstance(old_record, dict) else None
+
+        if old_price is None:
+            print(f"Saved price of {product_id} was invalid; replaced with ${new_price:.2f}.")
+            saved[product_id] = laptop
+            continue
+
+        if new_price < old_price:
+            if dry_run:
+                print(
+                    f"Would notify: {laptop['name']} "
+                    f"${old_price:.2f} -> ${new_price:.2f}"
+                )
+            elif not send_notification(topic, laptop, old_price):
+                continue
+            drops += 1
+
+        saved[product_id] = laptop
+
+    return drops
