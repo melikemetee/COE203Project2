@@ -63,6 +63,7 @@ def make_full_link(href):
         return None
     return url
 
+
 def fetch_page(url):
     try:
         response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
@@ -105,6 +106,73 @@ def parse_card(card):
         "link": link,
         "last_seen": timestamp(),
     }
+
+
+def scrape_laptops(url):
+    soup = fetch_page(url)
+    if soup is None:
+        return {}
+
+    cards = soup.select(".thumbnail")
+    if not cards:
+        print("No product cards found. The page structure may have changed.")
+        return {}
+
+    laptops = {}
+    skipped = 0
+    for card in cards:
+        laptop = parse_card(card)
+        if laptop is None:
+            skipped += 1
+        else:
+            laptops[laptop["id"]] = laptop
+
+    print(f"Found {len(cards)} product cards.")
+    if skipped:
+        print(f"Skipped {skipped} card(s) with missing or invalid data.")
+
+    return laptops
+
+
+def load_records(filename):
+    if not os.path.exists(filename):
+        return True, {}
+
+    try:
+        with open(filename, "r", encoding="utf-8") as file:
+            records = json.load(file)
+    except ValueError as error:
+        print(f"{filename} is not valid JSON: {error}")
+        return False, {}
+    except OSError as error:
+        print(f"{filename} could not be read: {error}")
+        return False, {}
+
+    if not isinstance(records, dict):
+        print(f"{filename} has an invalid data structure.")
+        return False, {}
+
+    return True, records
+
+
+def save_records(filename, records):
+    temp_filename = filename + ".tmp"
+
+    try:
+        with open(temp_filename, "w", encoding="utf-8") as file:
+            json.dump(records, file, indent=2, ensure_ascii=False, allow_nan=False)
+        os.replace(temp_filename, filename)
+    except (OSError, TypeError, ValueError) as error:
+        print(f"{filename} could not be saved: {error}")
+        try:
+            os.remove(temp_filename)
+        except OSError:
+            pass
+        return False
+
+    return True
+
+
 def build_message(laptop, old_price):
     new_price = laptop["price"]
     return (
@@ -167,3 +235,96 @@ def compare_and_notify(saved, current, topic, dry_run):
         saved[product_id] = laptop
 
     return drops
+
+
+def check_prices(filename, topic, dry_run):
+    print(f"\n[{timestamp()}] Checking laptop prices...")
+
+    ok, saved = load_records(filename)
+    if not ok:
+        print("Check skipped. Fix or delete the file; it was not changed.")
+        return
+
+    current = scrape_laptops(PAGE_URL)
+    if not current:
+        print("No usable data this time. Saved records were kept.")
+        return
+
+    if not saved:
+        print(
+            f"First run: {len(current)} laptops found. "
+            "Price drops are reported from the next check."
+        )
+        saved = current
+    else:
+        drops = compare_and_notify(saved, current, topic, dry_run)
+        print(f"Checked {len(current)} laptops: {drops} price drop(s).")
+
+    if dry_run:
+        print("Dry run: nothing was sent or saved.")
+        return
+
+    if save_records(filename, saved):
+        print(f"Saved {len(saved)} records to {filename}.")
+    else:
+        print("Warning: could not save records.")
+
+
+def run_every(interval_minutes, filename, topic, dry_run):
+    print(
+        f"Laptop price tracker started: checking every "
+        f"{interval_minutes} minute(s). Press Ctrl+C to stop."
+    )
+
+    while True:
+        start = time.monotonic()
+
+        try:
+            check_prices(filename, topic, dry_run)
+        except Exception as error:
+            print(f"Unexpected error during check: {error}")
+
+        wait = interval_minutes * 60 - (time.monotonic() - start)
+        if wait > 0:
+            print(f"Next check in {wait / 60:.1f} minutes.")
+            time.sleep(wait)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Track laptop prices on the webscraper.io test shop "
+                    "and send an ntfy alert when a price drops."
+    )
+    parser.add_argument("--topic", required=True,
+                        help="ntfy topic that receives the alerts")
+    parser.add_argument("--file", default=DEFAULT_FILE,
+                        help=f"JSON file for saved prices (default: {DEFAULT_FILE})")
+    parser.add_argument("--interval", type=int, default=DEFAULT_INTERVAL_MINUTES,
+                        help=f"minutes between checks (default: {DEFAULT_INTERVAL_MINUTES})")
+    parser.add_argument("--once", action="store_true",
+                        help="run a single check and exit")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="show what would happen without sending or saving")
+
+    args = parser.parse_args()
+
+    if args.interval < 1:
+        parser.error("--interval must be at least 1 minute")
+
+    return args
+
+
+def main():
+    args = parse_args()
+
+    try:
+        if args.once:
+            check_prices(args.file, args.topic, args.dry_run)
+        else:
+            run_every(args.interval, args.file, args.topic, args.dry_run)
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+
+if __name__ == "__main__":
+    main()
